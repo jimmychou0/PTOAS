@@ -10,6 +10,7 @@
 #include "PTO/Transforms/VPTOLLVMEmitter.h"
 #include "PTO/Transforms/Passes.h"
 #include "PTO/Transforms/BufferizableOpInterfaceImpl.h"
+#include "EmitCFatobjEmission.h"
 #include "VPTOFatobjEmission.h"
 #include "VPTOHostStubEmission.h"
 #include "mlir/IR/MLIRContext.h"
@@ -31,6 +32,7 @@
 #include "llvm/Support/SourceMgr.h"
 #include "llvm/Support/ToolOutputFile.h"
 #include "llvm/Support/FileSystem.h" // [Fix] Required for OF_None
+#include "llvm/Support/Process.h"
 #include "llvm/Support/Path.h"
 #include "ptobc/ptobc_decode.h"
 #include "mlir/Dialect/Bufferization/Transforms/OneShotAnalysis.h"
@@ -361,6 +363,18 @@ static llvm::cl::opt<bool> emitVPTO(
     "emit-vpto",
     llvm::cl::desc("Write final post-pass VPTO IR to -o"),
     llvm::cl::init(false));
+
+static llvm::cl::opt<bool> emitFatObj(
+    "emit-fatobj",
+    llvm::cl::desc("Compile generated C++ to fatobj via bisheng -xcce "
+                   "(EmitC backend only, requires ASCEND_HOME_PATH and "
+                   "PTO_ISA_ROOT)"),
+    llvm::cl::init(false));
+
+static llvm::cl::opt<std::string> ptoIsaRoot(
+    "pto-isa-root",
+    llvm::cl::desc("Path to pto-isa repo (default: $PTO_ISA_ROOT env)"),
+    llvm::cl::value_desc("path"), llvm::cl::init(""));
 
 static llvm::cl::opt<bool> vptoPrintIR(
     "vpto-print-ir",
@@ -1632,6 +1646,19 @@ int main(int argc, char **argv) {
   rewriteScalarConstantDecls(cppOutput);
   rewriteHoistedGlobalTensorDecls(cppOutput);
   
+  if (emitFatObj) {
+    std::string aicoreArch = (arch == "a3") ? "dav-c220-cube" : "dav-c310";
+    std::string isaRoot = ptoIsaRoot;
+    if (isaRoot.empty()) {
+      if (auto env = llvm::sys::Process::GetEnv("PTO_ISA_ROOT"))
+        isaRoot = *env;
+    }
+    if (failed(mlir::pto::emitEmitCFatobj(cppOutput, isaRoot, aicoreArch,
+                                          outputFile, llvm::errs())))
+      return 1;
+    return 0;
+  }
+
   *outputOS << cppOutput;
   outputOS->flush();
 
