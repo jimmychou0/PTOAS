@@ -204,6 +204,51 @@ time of writing that is LLVM 21 from the VPTO branch
 PTOAS CMake also verifies the LLVM major version and will reject an
 incompatible LLVM build.
 
+### CANN 9.0.0 AArch64 Setup
+
+For A5 simulator validation, install both the CANN 9.0.0 toolkit and the
+Ascend 950 operator package. The 950 ops package provides the
+`Ascend950PR_9599` simulator assets used by TileLib ST.
+
+```bash
+mkdir -p "$HOME/downloads/cann-9.0.0"
+cd "$HOME/downloads/cann-9.0.0"
+
+wget -O Ascend-cann-toolkit_9.0.0_linux-aarch64.run \
+  'https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-toolkit_9.0.0_linux-aarch64.run'
+bash ./Ascend-cann-toolkit_9.0.0_linux-aarch64.run --install
+
+wget -O Ascend-cann-950-ops_9.0.0_linux-aarch64.run \
+  'https://ascend-repo.obs.cn-east-2.myhuaweicloud.com/CANN/CANN%209.0.0/Ascend-cann-950-ops_9.0.0_linux-aarch64.run'
+bash ./Ascend-cann-950-ops_9.0.0_linux-aarch64.run --install
+```
+
+Point `ASCEND_HOME_PATH` at the installed CANN root. For a user-local install,
+this is commonly under `$HOME/Ascend/cann-9.0.0`; if your installer chose a
+different prefix, use the directory that contains `set_env.sh`.
+
+```bash
+export ASCEND_HOME_PATH="$HOME/Ascend/cann-9.0.0"
+source "$ASCEND_HOME_PATH/set_env.sh"
+
+test -f "$ASCEND_HOME_PATH/set_env.sh"
+test -d "$ASCEND_HOME_PATH/tools/simulator/Ascend950PR_9599/lib"
+command -v msprof
+```
+
+Run a minimal simulator smoke before building PTOAS. Use an output directory
+owned by the current user; `msprof` rejects world-writable locations such as
+plain `/tmp`.
+
+```bash
+mkdir -p "$HOME/.cache/ptoas/msprof-smoke"
+chmod 700 "$HOME/.cache" "$HOME/.cache/ptoas" "$HOME/.cache/ptoas/msprof-smoke" 2>/dev/null || true
+
+msprof op simulator --soc-version=Ascend950PR_9599 \
+  --output="$HOME/.cache/ptoas/msprof-smoke/cann900-a5" \
+  python3 -c 'print("msprof_Ascend950PR_9599_ok")'
+```
+
 Prepare the main paths:
 
 ```bash
@@ -234,6 +279,7 @@ command -v msprof
 test -d "$LLVM_BUILD_DIR/lib/cmake/llvm"
 test -d "$LLVM_BUILD_DIR/lib/cmake/mlir"
 test -d "$MLIR_PYTHON_ROOT"
+test -d "$ASCEND_HOME_PATH/tools/simulator/Ascend950PR_9599/lib"
 
 "$PYTHON_BIN" - <<'PY'
 import nanobind
@@ -249,6 +295,21 @@ print("pybind11", pybind11.__version__)
 print("torch", torch.__version__)
 print("torch_npu", getattr(torch_npu, "__version__", "unknown"))
 PY
+```
+
+If `MLIR_PYTHON_ROOT` belongs to another user or is otherwise read-only, copy
+the MLIR Python package to a writable overlay and use the overlay for
+`MLIR_PYTHON_PACKAGE_DIR`. PTOAS builds `_pto.so` into this package as part of
+`PTOPythonModules`, so CMake needs write permission there.
+
+```bash
+if [[ ! -w "$MLIR_PYTHON_ROOT/mlir/_mlir_libs" ]]; then
+  export MLIR_PYTHON_ROOT_ORIG="$MLIR_PYTHON_ROOT"
+  export MLIR_PYTHON_ROOT="$PTOAS_BUILD/mlir_core"
+  rm -rf "$MLIR_PYTHON_ROOT"
+  mkdir -p "$MLIR_PYTHON_ROOT"
+  cp -a "$MLIR_PYTHON_ROOT_ORIG"/. "$MLIR_PYTHON_ROOT"/
+fi
 ```
 
 If the lightweight build dependencies are missing, install them into the same
@@ -323,6 +384,18 @@ scripts/sim_dsl.sh --soc-version Ascend950PR_9599 \
   2>&1 | tee /tmp/tilelib-st-a5-sim.log
 ```
 
+Expected A5 TileLib ST coverage currently includes:
+
+```text
+tadd_f32_16x64
+tadd_f32_32x32
+tcolexpand_f32_1x8x128
+tcolsum_f32_16x128
+tload_store_nd_f32_16x64
+tload_store_dn_f32_16x64
+tmatmul_f32_16x32x64
+```
+
 Run one suite when debugging:
 
 ```bash
@@ -354,6 +427,12 @@ Common failures:
 - `simulator library directory not found`: check
   `$ASCEND_HOME_PATH/tools/simulator/<soc>/lib` and pass the matching
   `--soc-version`.
+- `unsupported soc version: Ascend950PR_9599`: verify that the CANN 9.0.0
+  toolkit and `Ascend-cann-950-ops` package were both installed, then rerun the
+  `msprof` smoke above.
+- `_pto...so` copy failure under another user's LLVM tree: copy
+  `MLIR_PYTHON_ROOT` to a writable overlay and point
+  `MLIR_PYTHON_PACKAGE_DIR` at that overlay before configuring PTOAS.
 - `No TileLib ST cases discovered`: pass the case root through
   `scripts/sim_dsl.sh ... run_tilelib_st.py -- test/tilelib-st/a5`, keeping
   the `--` separator.
