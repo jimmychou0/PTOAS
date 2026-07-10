@@ -270,7 +270,16 @@ Source CANN before importing `torch_npu` or launching the simulator:
 ```bash
 source "$ASCEND_HOME_PATH/set_env.sh" >/dev/null 2>&1 || \
 source "$ASCEND_HOME_PATH/bin/setenv.bash"
+
+# Simulator execution does not require the system NPU driver. Set this after
+# sourcing CANN so PTODSL does not probe /usr/local/Ascend/driver/kernel/inc.
+export ASCEND_DRIVER_PATH="$ASCEND_HOME_PATH/driver"
 ```
+
+The directory selected by `ASCEND_DRIVER_PATH` does not need to exist for
+simulator execution. PTODSL treats the driver headers as optional and skips
+the include path when it is absent. Do not change permissions under
+`/usr/local/Ascend/driver` just to run the simulator.
 
 Check the simulator, LLVM, and Python prerequisites:
 
@@ -415,6 +424,8 @@ Example path layout:
 
 ```bash
 export ASCEND_HOME_PATH=/opt/ascend/cann
+source "$ASCEND_HOME_PATH/set_env.sh"
+export ASCEND_DRIVER_PATH="$ASCEND_HOME_PATH/driver"
 export LLVM_BUILD_DIR=/opt/vpto-llvm/build
 export MLIR_PYTHON_ROOT="$LLVM_BUILD_DIR/tools/mlir/python_packages/mlir_core"
 export PYTHON_BIN=/opt/ptodsl-runtime/bin/python
@@ -430,6 +441,10 @@ Common failures:
 - `unsupported soc version: Ascend950PR_9599`: verify that the CANN 9.0.0
   toolkit and `Ascend-cann-950-ops` package were both installed, then rerun the
   `msprof` smoke above.
+- `Permission denied` under `/usr/local/Ascend/driver/kernel/inc`: the simulator
+  does not require the system NPU driver. After sourcing CANN, set
+  `ASCEND_DRIVER_PATH="$ASCEND_HOME_PATH/driver"`; do not use `sudo` or relax
+  permissions on the system driver directory.
 - `_pto...so` copy failure under another user's LLVM tree: copy
   `MLIR_PYTHON_ROOT` to a writable overlay and point
   `MLIR_PYTHON_PACKAGE_DIR` at that overlay before configuring PTOAS.
