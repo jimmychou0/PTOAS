@@ -16,6 +16,9 @@
 
 #include "VPTOInternal.h"
 
+#include "mlir/IR/BuiltinAttributes.h"
+#include "llvm/ADT/STLExtras.h"
+
 using namespace mlir;
 using namespace mlir::pto;
 
@@ -25,6 +28,11 @@ void MadOp::getEffects(
   effects.emplace_back(MemoryEffects::Read::get(), &getLhsMutable());
   effects.emplace_back(MemoryEffects::Read::get(), &getRhsMutable());
   effects.emplace_back(MemoryEffects::Write::get(), &getDstMutable());
+  if (getAccInitValue()) {
+    // Runtime acc-init may select the accumulate path (flag 0), which reads
+    // the existing accumulator; model dst as read+write conservatively.
+    effects.emplace_back(MemoryEffects::Read::get(), &getDstMutable());
+  }
 }
 
 static LogicalResult verifyMadPointerKinds(Operation *op, Type lhsTy, Type rhsTy,
@@ -293,7 +301,14 @@ static ParseResult parseMadSemanticTypes(OpAsmParser &parser, bool hasBias,
                                          Type &lhsType, Type &rhsType,
                                          Type &dstType, Type &biasType,
                                          Type &mType, Type &nType,
-                                         Type &kType) {
+                                         Type &kType,
+                                         bool hasUnitFlagValue,
+                                         bool hasAccInitValue,
+                                         bool hasDisableGemvValue,
+                                         bool hasBiasInitValue,
+                                         Type &unitFlagType, Type &accInitType,
+                                         Type &disableGemvType,
+                                         Type &biasInitType) {
   if (parser.parseType(lhsType) || parser.parseComma() ||
       parser.parseType(rhsType) || parser.parseComma() ||
       parser.parseType(dstType) || parser.parseComma()) {
@@ -307,6 +322,24 @@ static ParseResult parseMadSemanticTypes(OpAsmParser &parser, bool hasBias,
   if (parser.parseType(mType) || parser.parseComma() ||
       parser.parseType(nType) || parser.parseComma() ||
       parser.parseType(kType)) {
+    return failure();
+  }
+  // Runtime flag operand types trail the shape types, in operand order. The
+  // concrete width/signedness is whatever the frontend produced (i1/i32/si32),
+  // so parse them generically and let the op verifier enforce the contract.
+  auto parseFlagType = [&](Type &out) {
+    return failure(parser.parseComma() || parser.parseType(out));
+  };
+  if (hasUnitFlagValue && failed(parseFlagType(unitFlagType))) {
+    return failure();
+  }
+  if (hasAccInitValue && failed(parseFlagType(accInitType))) {
+    return failure();
+  }
+  if (hasDisableGemvValue && failed(parseFlagType(disableGemvType))) {
+    return failure();
+  }
+  if (hasBiasInitValue && failed(parseFlagType(biasInitType))) {
     return failure();
   }
   return success();
@@ -355,6 +388,38 @@ template <typename OpT>
       parser.parseOperand(k)) {
     return failure();
   }
+  OpAsmParser::UnresolvedOperand unitFlagValue, accInitValue,
+      disableGemvValue, biasInitValue;
+  bool hasUnitFlagValue = false, hasAccInitValue = false,
+       hasDisableGemvValue = false, hasBiasInitValue = false;
+  if (succeeded(parser.parseOptionalKeyword("unit_flag_value"))) {
+    hasUnitFlagValue = true;
+    if (parser.parseLParen() || parser.parseOperand(unitFlagValue) ||
+        parser.parseRParen()) {
+      return failure();
+    }
+  }
+  if (succeeded(parser.parseOptionalKeyword("acc_init"))) {
+    hasAccInitValue = true;
+    if (parser.parseLParen() || parser.parseOperand(accInitValue) ||
+        parser.parseRParen()) {
+      return failure();
+    }
+  }
+  if (succeeded(parser.parseOptionalKeyword("disable_gemv_value"))) {
+    hasDisableGemvValue = true;
+    if (parser.parseLParen() || parser.parseOperand(disableGemvValue) ||
+        parser.parseRParen()) {
+      return failure();
+    }
+  }
+  if (succeeded(parser.parseOptionalKeyword("bias_init"))) {
+    hasBiasInitValue = true;
+    if (parser.parseLParen() || parser.parseOperand(biasInitValue) ||
+        parser.parseRParen()) {
+      return failure();
+    }
+  }
   NamedAttrList attrs;
   if (failed(parseMadSemanticClauses(parser, attrs, parseTf32ModeClause))) {
     return failure();
@@ -363,15 +428,61 @@ template <typename OpT>
     return failure();
   }
   Type lhsType, rhsType, dstType, mType, nType, kType, biasType;
+  Type unitFlagType, accInitType, disableGemvType, biasInitType;
   if (failed(parseMadSemanticTypes(parser, hasBias, lhsType, rhsType, dstType,
-                                   biasType, mType, nType, kType))) {
+                                   biasType, mType, nType, kType,
+                                   hasUnitFlagValue, hasAccInitValue,
+                                   hasDisableGemvValue, hasBiasInitValue,
+                                   unitFlagType, accInitType, disableGemvType,
+                                   biasInitType))) {
     return failure();
   }
+  Builder &builder = parser.getBuilder();
+  Type i32Type = builder.getI32Type();
+  Type i1Type = builder.getI1Type();
+  (void)i32Type;
+  (void)i1Type;
   result.addAttributes(attrs);
+  {
+    // AttrSizedOperandSegments is mandatory once multiple Optional variadic
+    // operands exist. Lit/ptodsl inputs usually omit it; prefill the canonical
+    // segment sizes ([1]*fixed + optional-flags-present flags) when absent.
+    constexpr int kFlagKinds = 4;
+    if (!result.attributes.get("operandSegmentSizes")) {
+      int fixedCount = (hasBias ? 4 : 3) + 3;
+      llvm::SmallVector<int32_t, 10> sizes(fixedCount, 1);
+      sizes.push_back(hasUnitFlagValue ? 1 : 0);
+      sizes.push_back(hasAccInitValue ? 1 : 0);
+      sizes.push_back(hasDisableGemvValue ? 1 : 0);
+      sizes.push_back(hasBiasInitValue ? 1 : 0);
+      (void)kFlagKinds;
+      result.addAttribute(
+          "operandSegmentSizes",
+          mlir::DenseI32ArrayAttr::get(parser.getContext(), sizes));
+    }
+  }
   if (failed(resolveMadSemanticOperands(parser, result, hasBias, lhs, lhsType,
                                         rhs, rhsType, dst, dstType, bias,
                                         biasType, m, mType, n, nType, k,
                                         kType))) {
+    return failure();
+  }
+  // Resolve the runtime flag operands in operand order.
+  if (hasUnitFlagValue &&
+      parser.resolveOperand(unitFlagValue, unitFlagType, result.operands)) {
+    return failure();
+  }
+  if (hasAccInitValue &&
+      parser.resolveOperand(accInitValue, accInitType, result.operands)) {
+    return failure();
+  }
+  if (hasDisableGemvValue &&
+      parser.resolveOperand(disableGemvValue, disableGemvType,
+                            result.operands)) {
+    return failure();
+  }
+  if (hasBiasInitValue &&
+      parser.resolveOperand(biasInitValue, biasInitType, result.operands)) {
     return failure();
   }
   return success();
@@ -401,6 +512,27 @@ static void printMadSemanticClauses(OpAsmPrinter &printer, Operation *op,
   }
 }
 
+template <typename OpT>
+static void printMadRuntimeFlagClauses(OpAsmPrinter &printer, OpT op) {
+  // All mad-family ops carry the optional runtime flag operands.
+  if constexpr (std::is_same_v<OpT, OpT>) {
+    if (auto uf = op.getUnitFlagValue()) {
+      printer << " unit_flag_value(" << uf << ")";
+    }
+    if (auto acc = op.getAccInitValue()) {
+      printer << " acc_init(" << acc << ")";
+    }
+    if (auto gemv = op.getDisableGemvValue()) {
+      printer << " disable_gemv_value(" << gemv << ")";
+    }
+    if (auto bias = op.getBiasInitValue()) {
+      printer << " bias_init(" << bias << ")";
+    }
+  } else {
+    (void)op;
+  }
+}
+
 static ArrayRef<StringRef> getMadSemanticElidedAttrs(bool allowTf32Mode) {
   static constexpr StringRef kWithTf32[] = {"unit_flag_mode", "disable_gemv",
                                             "sat_mode", "tf32_mode", "n_dir"};
@@ -412,16 +544,73 @@ static ArrayRef<StringRef> getMadSemanticElidedAttrs(bool allowTf32Mode) {
 }
 
 template <typename OpT>
+static void printMadOperandSegmentSizesIfNeeded(OpAsmPrinter &printer, OpT op) {
+  // When any runtime flag operand is present and the op does not already
+  // carry operandSegmentSizes, emit the canonical attribute so the printed
+  // form always re-parses (AttrSizedOperandSegments is mandatory).
+  if (op->getAttr("operandSegmentSizes")) {
+    return;
+  }
+  bool any = op.getUnitFlagValue() || op.getAccInitValue() ||
+             op.getDisableGemvValue() || op.getBiasInitValue();
+  if (!any) {
+    return;
+  }
+  llvm::SmallVector<int32_t, 10> sizes;
+  auto push = [&sizes](Value v) { sizes.push_back(v ? 1 : 0); };
+  push(op.getLhs());
+  push(op.getRhs());
+  push(op.getDst());
+  if constexpr (std::is_same_v<OpT, MadBiasOp> ||
+                std::is_same_v<OpT, MadMxBiasOp>) {
+    push(op.getBias());
+  }
+  push(op.getM());
+  push(op.getN());
+  push(op.getK());
+  push(op.getUnitFlagValue());
+  push(op.getAccInitValue());
+  push(op.getDisableGemvValue());
+  push(op.getBiasInitValue());
+  printer << " {operandSegmentSizes = array<i32:";
+  llvm::interleave(sizes, printer, [&printer](int32_t s) { printer << " " << s; }, ",");
+  printer << "}";
+}
+
+template <typename OpT>
+static void appendMadRuntimeFlagTypes(OpAsmPrinter &printer, OpT op) {
+  if constexpr (std::is_same_v<OpT, OpT>) {
+    if (auto uf = op.getUnitFlagValue()) {
+      printer << ", " << uf.getType();
+    }
+    if (auto acc = op.getAccInitValue()) {
+      printer << ", " << acc.getType();
+    }
+    if (auto gemv = op.getDisableGemvValue()) {
+      printer << ", " << gemv.getType();
+    }
+    if (auto bias = op.getBiasInitValue()) {
+      printer << ", " << bias.getType();
+    }
+  } else {
+    (void)op;
+  }
+}
+
+template <typename OpT>
 static void printMadSemanticOpNoBias(OpAsmPrinter &printer, OpT op,
                                      bool allowTf32Mode) {
   printer << ' ' << op.getLhs() << ", " << op.getRhs() << ", " << op.getDst()
           << ", " << op.getM() << ", " << op.getN() << ", " << op.getK();
+  printMadRuntimeFlagClauses(printer, op);
   printMadSemanticClauses(printer, op, allowTf32Mode);
+  printMadOperandSegmentSizesIfNeeded(printer, op);
   printer.printOptionalAttrDict(op->getAttrs(),
                                 getMadSemanticElidedAttrs(allowTf32Mode));
   printer << " : " << op.getLhs().getType() << ", " << op.getRhs().getType()
           << ", " << op.getDst().getType() << ", " << op.getM().getType()
           << ", " << op.getN().getType() << ", " << op.getK().getType();
+  appendMadRuntimeFlagTypes(printer, op);
 }
 
 template <typename OpT>
@@ -430,13 +619,16 @@ static void printMadSemanticOpWithBias(OpAsmPrinter &printer, OpT op,
   printer << ' ' << op.getLhs() << ", " << op.getRhs() << ", " << op.getDst()
           << ", " << op.getBias() << ", " << op.getM() << ", " << op.getN()
           << ", " << op.getK();
+  printMadRuntimeFlagClauses(printer, op);
   printMadSemanticClauses(printer, op, allowTf32Mode);
+  printMadOperandSegmentSizesIfNeeded(printer, op);
   printer.printOptionalAttrDict(op->getAttrs(),
                                 getMadSemanticElidedAttrs(allowTf32Mode));
   printer << " : " << op.getLhs().getType() << ", " << op.getRhs().getType()
           << ", " << op.getDst().getType() << ", " << op.getBias().getType()
           << ", " << op.getM().getType() << ", " << op.getN().getType()
           << ", " << op.getK().getType();
+  appendMadRuntimeFlagTypes(printer, op);
 }
 
 // Batch7: Mad 家族共用 tf32_mode 读取 + 语义校验
