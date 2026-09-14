@@ -590,6 +590,11 @@ struct MadXtConfig {
   bool disableGemv;
   bool cmatrixSource;
   bool cmatrixInit;
+  // Runtime-operand overrides (take precedence over the static fields above).
+  Value unitFlagValue;   // i32|si32, expected domain 0/2/3; packed to bits 55-56
+  Value accInitValue;    // i1-like, packed to bit 63 (zero-Cmatrix)
+  Value disableGemvValue;// i1-like, packed to bit 61
+  Value biasInitValue;   // i1-like, packed to bit 62 (BTbuf)
 };
 
 static FailureOr<Value> packMadXt(Location loc, const MadXtConfig &config,
@@ -613,23 +618,63 @@ static FailureOr<Value> packMadXt(Location loc, const MadXtConfig &config,
     return rewriter.create<arith::OrIOp>(loc, lhs, rhs);
   };
 
+  auto coerceToI64 = [&](Value value) -> Value {
+    // Frontend runtime flags may carry signed integer types (e.g. si32 from
+    // PTODSL scalar.select); arith ops require signless operands, so
+    // reinterpret the bits first and then widen.
+    if (auto intTy = dyn_cast<IntegerType>(value.getType())) {
+      if (!intTy.isSignless()) {
+        Type signless =
+            IntegerType::get(rewriter.getContext(), intTy.getWidth());
+        value = rewriter
+                    .create<UnrealizedConversionCastOp>(loc, signless, value)
+                    .getResult(0);
+      }
+    }
+    return castIntegerLikeTo(loc, value, i64Ty, rewriter);
+  };
+
   Value xt = mI64;
   xt = bitOr(xt, shl(kI64, mlir::pto::kValue12));
   xt = bitOr(xt, shl(nI64, mlir::pto::kValue24));
-  if (config.unitFlagMode) {
+  if (config.unitFlagValue) {
+    Value flagI64 = coerceToI64(config.unitFlagValue);
+    if (!flagI64) {
+      return failure();
+    }
+    xt = bitOr(xt, shl(flagI64, mlir::pto::kValue55));
+  } else if (config.unitFlagMode) {
     uint64_t unitFlagCtrl =
         *config.unitFlagMode == pto::MadUnitFlagMode::CheckOnly
             ? mlir::pto::kValue2
             : mlir::pto::kValue3;
     xt = bitOr(xt, shl(constant(unitFlagCtrl), mlir::pto::kValue55));
   }
-  if (config.disableGemv) {
+  if (config.disableGemvValue) {
+    Value gemvI64 = coerceToI64(config.disableGemvValue);
+    if (!gemvI64) {
+      return failure();
+    }
+    xt = bitOr(xt, shl(gemvI64, mlir::pto::kValue61));
+  } else if (config.disableGemv) {
     xt = bitOr(xt, shl(constant(1), mlir::pto::kValue61));
   }
-  if (config.cmatrixSource) {
+  if (config.biasInitValue) {
+    Value biasI64 = coerceToI64(config.biasInitValue);
+    if (!biasI64) {
+      return failure();
+    }
+    xt = bitOr(xt, shl(biasI64, mlir::pto::kValue62));
+  } else if (config.cmatrixSource) {
     xt = bitOr(xt, shl(constant(1), mlir::pto::kValue62));
   }
-  if (config.cmatrixInit) {
+  if (config.accInitValue) {
+    Value accI64 = coerceToI64(config.accInitValue);
+    if (!accI64) {
+      return failure();
+    }
+    xt = bitOr(xt, shl(accI64, mlir::pto::kValue63));
+  } else if (config.cmatrixInit) {
     xt = bitOr(xt, shl(constant(1), mlir::pto::kValue63));
   }
   return xt;
@@ -1319,8 +1364,9 @@ static LogicalResult lowerMadSemanticOp(pto::MadSemanticOpInterface op,
   FailureOr<Value> xt = packMadXt(
       loc,
       {op.getM(), op.getN(), op.getK(), unitFlagMode, op.getDisableGemv(),
-       op.initializesAccumulatorWithBias(),
-       op.initializesAccumulatorWithZero()},
+       op.initializesAccumulatorWithBias(), op.initializesAccumulatorWithZero(),
+       op.getUnitFlagValueOrNull(), op.getAccInitValueOrNull(),
+       op.getDisableGemvValueOrNull(), op.getBiasInitValueOrNull()},
       rewriter);
   if (failed(xt)) {
     return rewriter.notifyMatchFailure(op, "failed to pack mad xt");

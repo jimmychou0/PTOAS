@@ -239,11 +239,12 @@ ParseResult parseMadSemanticClauses(OpAsmParser &parser,
   return success();
 }
 
-ParseResult parseMadSemanticTypes(OpAsmParser &parser, bool hasBias,
-                                         Type &lhsType, Type &rhsType,
-                                         Type &dstType, Type &biasType,
-                                         Type &mType, Type &nType,
-                                         Type &kType) {
+ParseResult parseMadSemanticTypes(
+    OpAsmParser &parser, bool hasBias, Type &lhsType, Type &rhsType,
+    Type &dstType, Type &biasType, Type &mType, Type &nType, Type &kType,
+    bool hasUnitFlagValue, bool hasAccInitValue, bool hasDisableGemvValue,
+    bool hasBiasInitValue, Type &unitFlagType, Type &accInitType,
+    Type &disableGemvType, Type &biasInitType) {
   if (parser.parseType(lhsType) || parser.parseComma() ||
       parser.parseType(rhsType) || parser.parseComma() ||
       parser.parseType(dstType) || parser.parseComma()) {
@@ -257,6 +258,24 @@ ParseResult parseMadSemanticTypes(OpAsmParser &parser, bool hasBias,
   if (parser.parseType(mType) || parser.parseComma() ||
       parser.parseType(nType) || parser.parseComma() ||
       parser.parseType(kType)) {
+    return failure();
+  }
+  // Runtime flag operand types trail the shape types, in operand order. The
+  // concrete width/signedness is whatever the frontend produced (i1/i32/si32),
+  // so parse them generically and let the op verifier enforce the contract.
+  auto parseFlagType = [&parser](Type &out) {
+    return failure(parser.parseComma() || parser.parseType(out));
+  };
+  if (hasUnitFlagValue && failed(parseFlagType(unitFlagType))) {
+    return failure();
+  }
+  if (hasAccInitValue && failed(parseFlagType(accInitType))) {
+    return failure();
+  }
+  if (hasDisableGemvValue && failed(parseFlagType(disableGemvType))) {
+    return failure();
+  }
+  if (hasBiasInitValue && failed(parseFlagType(biasInitType))) {
     return failure();
   }
   return success();

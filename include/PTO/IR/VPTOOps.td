@@ -2093,6 +2093,7 @@ def PTO_VnotOp : PTO_UnaryVecOp<"vnot">;
 def PTO_VcaddOp : PTO_UnaryVecOp<"vcadd">;
 
 def PTO_MadOp : PTO_CubeMicroOp<"mad", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<PTO_MadSemanticOpInterface, [
       "isMadMxFamily", "hasBiasOperand", "readsAccumulator",
       "supportsTf32Mode", "getBiasOrNull"
@@ -2106,6 +2107,10 @@ def PTO_MadOp : PTO_CubeMicroOp<"mad", [
     I64:$m,
     I64:$n,
     I64:$k,
+    Optional<AnyTypeOf<[I32, SI32]>>:$unit_flag_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$acc_init_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$disable_gemv_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$bias_init_value,
     OptionalAttr<PTO_MadUnitFlagModeAttr>:$unit_flag_mode,
     UnitAttr:$disable_gemv,
     OptionalAttr<PTO_MadSatModeAttr>:$sat_mode,
@@ -2119,6 +2124,7 @@ def PTO_MadOp : PTO_CubeMicroOp<"mad", [
 }
 
 def PTO_MadAccOp : PTO_CubeMicroOp<"mad_acc", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<PTO_MadSemanticOpInterface, [
       "isMadMxFamily", "hasBiasOperand", "readsAccumulator",
       "supportsTf32Mode", "getBiasOrNull"
@@ -2132,6 +2138,10 @@ def PTO_MadAccOp : PTO_CubeMicroOp<"mad_acc", [
     I64:$m,
     I64:$n,
     I64:$k,
+    Optional<AnyTypeOf<[I32, SI32]>>:$unit_flag_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$acc_init_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$disable_gemv_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$bias_init_value,
     OptionalAttr<PTO_MadUnitFlagModeAttr>:$unit_flag_mode,
     UnitAttr:$disable_gemv,
     OptionalAttr<PTO_MadSatModeAttr>:$sat_mode,
@@ -2145,6 +2155,7 @@ def PTO_MadAccOp : PTO_CubeMicroOp<"mad_acc", [
 }
 
 def PTO_MadBiasOp : PTO_CubeMicroOp<"mad_bias", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<PTO_MadSemanticOpInterface, [
       "isMadMxFamily", "hasBiasOperand", "readsAccumulator",
       "supportsTf32Mode", "getBiasOrNull"
@@ -2159,6 +2170,10 @@ def PTO_MadBiasOp : PTO_CubeMicroOp<"mad_bias", [
     I64:$m,
     I64:$n,
     I64:$k,
+    Optional<AnyTypeOf<[I32, SI32]>>:$unit_flag_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$acc_init_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$disable_gemv_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$bias_init_value,
     OptionalAttr<PTO_MadUnitFlagModeAttr>:$unit_flag_mode,
     UnitAttr:$disable_gemv,
     OptionalAttr<PTO_MadSatModeAttr>:$sat_mode,
@@ -2172,6 +2187,7 @@ def PTO_MadBiasOp : PTO_CubeMicroOp<"mad_bias", [
 }
 
 def PTO_MadMxOp : PTO_CubeMicroOp<"mad_mx", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<PTO_MadSemanticOpInterface, [
       "isMadMxFamily", "hasBiasOperand", "readsAccumulator",
       "supportsTf32Mode", "getBiasOrNull", "getTf32ModeAttr"
@@ -2185,6 +2201,10 @@ def PTO_MadMxOp : PTO_CubeMicroOp<"mad_mx", [
     I64:$m,
     I64:$n,
     I64:$k,
+    Optional<AnyTypeOf<[I32, SI32]>>:$unit_flag_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$acc_init_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$disable_gemv_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$bias_init_value,
     OptionalAttr<PTO_MadUnitFlagModeAttr>:$unit_flag_mode,
     UnitAttr:$disable_gemv,
     OptionalAttr<PTO_MadSatModeAttr>:$sat_mode,
@@ -2197,6 +2217,7 @@ def PTO_MadMxOp : PTO_CubeMicroOp<"mad_mx", [
 }
 
 def PTO_MadMxAccOp : PTO_CubeMicroOp<"mad_mx_acc", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<PTO_MadSemanticOpInterface, [
       "isMadMxFamily", "hasBiasOperand", "readsAccumulator",
       "supportsTf32Mode", "getBiasOrNull", "getTf32ModeAttr"
@@ -2210,6 +2231,10 @@ def PTO_MadMxAccOp : PTO_CubeMicroOp<"mad_mx_acc", [
     I64:$m,
     I64:$n,
     I64:$k,
+    Optional<AnyTypeOf<[I32, SI32]>>:$unit_flag_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$acc_init_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$disable_gemv_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$bias_init_value,
     OptionalAttr<PTO_MadUnitFlagModeAttr>:$unit_flag_mode,
     UnitAttr:$disable_gemv,
     OptionalAttr<PTO_MadSatModeAttr>:$sat_mode,
@@ -2222,6 +2247,7 @@ def PTO_MadMxAccOp : PTO_CubeMicroOp<"mad_mx_acc", [
 }
 
 def PTO_MadMxBiasOp : PTO_CubeMicroOp<"mad_mx_bias", [
+    AttrSizedOperandSegments,
     DeclareOpInterfaceMethods<PTO_MadSemanticOpInterface, [
       "isMadMxFamily", "hasBiasOperand", "readsAccumulator",
       "supportsTf32Mode", "getBiasOrNull", "getTf32ModeAttr"
@@ -2236,6 +2262,10 @@ def PTO_MadMxBiasOp : PTO_CubeMicroOp<"mad_mx_bias", [
     I64:$m,
     I64:$n,
     I64:$k,
+    Optional<AnyTypeOf<[I32, SI32]>>:$unit_flag_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$acc_init_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$disable_gemv_value,
+    Optional<AnyTypeOf<[I1, SI32, I32]>>:$bias_init_value,
     OptionalAttr<PTO_MadUnitFlagModeAttr>:$unit_flag_mode,
     UnitAttr:$disable_gemv,
     OptionalAttr<PTO_MadSatModeAttr>:$sat_mode,
